@@ -23,6 +23,30 @@ from hermes_cli.main import (
     _install_hangup_protection,
 )
 
+# Snapshot the *real* stdio at collection time — before any other test
+# module gets a chance to run.  ``tui_gateway.server`` unconditionally
+# aliases ``sys.stdout = sys.stderr`` at import time (by design, so stray
+# prints from tools don't corrupt its JSON-RPC stdout protocol), and
+# several test modules import it eagerly at module scope
+# (e.g. ``tests/gateway/test_complete_path_at_filter.py``,
+# ``tests/test_tui_gateway_server.py``).  Under pytest-xdist's long-lived
+# worker processes that global mutation can leak into whichever test
+# happens to run next in the same worker.  ``tests/tui_gateway/
+# test_protocol.py`` already guards its own tests against exactly this
+# with an autouse restore fixture; mirror that precedent here so this
+# module's ``isinstance(sys.stdout, _UpdateOutputStream)`` assertions are
+# always evaluated against real stdio rather than whatever an unrelated
+# module/test last left behind.
+_real_stdout = sys.stdout
+_real_stderr = sys.stderr
+
+
+@pytest.fixture(autouse=True)
+def _restore_real_stdio():
+    sys.stdout, sys.stderr = _real_stdout, _real_stderr
+    yield
+    sys.stdout, sys.stderr = _real_stdout, _real_stderr
+
 
 # -----------------------------------------------------------------------------
 # _UpdateOutputStream
