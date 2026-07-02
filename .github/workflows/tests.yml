@@ -51,7 +51,7 @@ jobs:
           # sandbox RPC), flaking the hangup-protection assertions. Run them serially.
           python -m pytest tests/ -q --ignore=tests/integration --ignore=tests/e2e --tb=short -n auto --timeout=30 --timeout-method=signal \
             --deselect tests/hermes_cli/test_update_hangup_protection.py
-          python -m pytest tests/hermes_cli/test_update_hangup_protection.py -q --tb=short -p no:xdist --timeout=30 --timeout-method=signal
+          python -m pytest tests/hermes_cli/test_update_hangup_protection.py -q --tb=short -n0 --timeout=30 --timeout-method=signal
         env:
           # Ensure tests don't accidentally call real APIs
           OPENROUTER_API_KEY: ""
