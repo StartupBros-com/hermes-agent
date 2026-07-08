@@ -17,7 +17,10 @@ jobs:
   nix:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Keep the main Nix gate Linux-only. macOS runners bill at 10x and this
+        # workflow only evaluated the Darwin flake, so Darwin eval lives in
+        # nix-darwin.yml with path filters + workflow_dispatch.
+        os: ["ubuntu-latest"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -112,6 +115,3 @@ jobs:
           fi
           exit 1
 
-      - name: Evaluate flake (macOS)
-        if: runner.os == 'macOS'
-        run: nix flake show --json > /dev/null

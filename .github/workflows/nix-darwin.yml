@@ -1,0 +1,39 @@
+name: Nix (darwin eval)
+
+# Darwin flake-evaluation smoke test, split out of nix.yml.
+#
+# macOS runners bill at 10x and this check only evaluates the flake (no build),
+# so it runs only when Nix inputs change on main, or manually on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.nix'
+      - 'flake.lock'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'ui-tui/package.json'
+      - 'ui-tui/package-lock.json'
+      - 'web/package.json'
+      - 'web/package-lock.json'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-darwin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/nix-setup
+        with:
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Evaluate flake (macOS)
+        run: nix flake show --json > /dev/null
