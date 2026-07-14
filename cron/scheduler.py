@@ -147,6 +147,16 @@ def _get_lock_paths() -> tuple[Path, Path]:
     return lock_dir, lock_dir / ".tick.lock"
 
 
+def _load_profile_dotenv(profile_home: Path) -> None:
+    """Load a profile dotenv with the scheduler's encoding fallback."""
+    from dotenv import load_dotenv
+
+    try:
+        load_dotenv(str(profile_home / ".env"), override=True, encoding="utf-8")
+    except UnicodeDecodeError:
+        load_dotenv(str(profile_home / ".env"), override=True, encoding="latin-1")
+
+
 @contextmanager
 def _job_profile_context(job_id: str, profile: Optional[str]):
     """Temporarily run a job under a specific Hermes profile.
@@ -197,6 +207,10 @@ def _job_profile_context(job_id: str, profile: Optional[str]):
             normalized_profile,
             profile_home,
         )
+        # Load the target profile environment before any scheduler-owned pre-run
+        # script executes. The context restores os.environ on exit, and tick()
+        # serializes profile jobs so this process-global mutation stays isolated.
+        _load_profile_dotenv(profile_home)
         yield normalized_profile
     finally:
         _hermes_home = prior_override
@@ -1134,11 +1148,31 @@ def _scan_assembled_cron_prompt(assembled: str, job: dict) -> str:
 def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
     """Execute a single cron job, applying any per-job profile override."""
     job_id = job["id"]
-    with _job_profile_context(job_id, job.get("profile")):
-        return _run_job_impl(job)
+    try:
+        with _job_profile_context(job_id, job.get("profile")) as active_profile:
+            return _run_job_impl(job, profile_env_loaded=active_profile is not None)
+    except Exception as exc:
+        job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
+        error_msg = f"{type(exc).__name__}: {exc}"
+        logger.exception("Job '%s' failed during profile setup: %s", job_name, error_msg)
+        output = f"""# Cron Job: {job_name} (FAILED)
+
+**Job ID:** {job_id}
+**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}
+**Schedule:** {job.get('schedule_display', 'N/A')}
+
+## Error
+
+```
+{error_msg}
+```
+"""
+        return False, output, "", error_msg
 
 
-def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
+def _run_job_impl(
+    job: dict, *, profile_env_loaded: bool = False
+) -> tuple[bool, str, str, Optional[str]]:
     """
     Execute a single cron job.
     
@@ -1395,13 +1429,11 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
         logger.info("Job '%s': using workdir %s", job_id, _job_workdir)
 
     try:
-        # Re-read .env and config.yaml fresh every run so provider/key
-        # changes take effect without a gateway restart.
-        from dotenv import load_dotenv
-        try:
-            load_dotenv(str(_get_hermes_home() / ".env"), override=True, encoding="utf-8")
-        except UnicodeDecodeError:
-            load_dotenv(str(_get_hermes_home() / ".env"), override=True, encoding="latin-1")
+        # Profile jobs load their target dotenv at context entry so pre-run
+        # scripts see it. Preserve the existing per-run refresh for jobs that
+        # use the scheduler's current profile or fell back from an invalid one.
+        if not profile_env_loaded:
+            _load_profile_dotenv(_get_hermes_home())
 
         delivery_target = _resolve_delivery_target(job)
         if delivery_target:

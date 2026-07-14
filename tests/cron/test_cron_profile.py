@@ -282,17 +282,31 @@ class TestRunJobProfileContext:
 
         monkeypatch.setattr(dotenv, "load_dotenv", fake_load_dotenv)
 
+        def observe_prerun(_script_path):
+            observed["profile_env_only_during_prerun"] = os.environ.get(
+                "HERMES_PROFILE_TEST_ONLY"
+            )
+            observed["profile_env_shared_during_prerun"] = os.environ.get(
+                "HERMES_PROFILE_TEST_SHARED"
+            )
+            return True, "prerun output"
+
+        monkeypatch.setattr(sched, "_run_job_script", observe_prerun)
+
         job = {
             "id": "env-profile",
             "name": "profile-env-job",
             "profile": "support",
             "schedule_display": "manual",
+            "script": "profile-env-check.py",
         }
 
         success, _output, _response, error = sched.run_job(job)
 
         assert success is True, error
         assert observed["dotenv_paths"] == [str(profile_home / ".env")]
+        assert observed["profile_env_only_during_prerun"] == "profile-only"
+        assert observed["profile_env_shared_during_prerun"] == "profile-value"
         assert observed["profile_env_only_during_init"] == "profile-only"
         assert observed["profile_env_shared_during_init"] == "profile-value"
         assert observed["profile_env_only_during_run"] == "profile-only"
@@ -300,6 +314,39 @@ class TestRunJobProfileContext:
         assert os.environ["HERMES_PROFILE_TEST_SHARED"] == "outer"
         assert "HERMES_PROFILE_TEST_ONLY" not in os.environ
         assert os.environ["HERMES_CRON_TIMEOUT"] == "0"
+        assert os.environ["HERMES_HOME"] == str(root)
+        assert sched._get_hermes_home() == root
+
+    def test_profile_dotenv_error_returns_failed_job_and_restores_environment(
+        self, isolated_cron_profile_home, monkeypatch
+    ):
+        import dotenv
+        import cron.scheduler as sched
+
+        root, _profile_home = isolated_cron_profile_home
+        monkeypatch.setenv("HERMES_PROFILE_TEST_SHARED", "outer")
+
+        def fail_load_dotenv(*_a, **_kw):
+            os.environ["HERMES_PROFILE_TEST_SHARED"] = "partially-loaded"
+            raise PermissionError("profile dotenv unreadable")
+
+        monkeypatch.setattr(dotenv, "load_dotenv", fail_load_dotenv)
+        monkeypatch.setattr(sched, "_hermes_home", None)
+
+        job = {
+            "id": "env-profile-error",
+            "name": "profile-env-error-job",
+            "profile": "support",
+            "schedule_display": "manual",
+        }
+
+        success, output, response, error = sched.run_job(job)
+
+        assert success is False
+        assert "PermissionError: profile dotenv unreadable" in error
+        assert "# Cron Job: profile-env-error-job (FAILED)" in output
+        assert response == ""
+        assert os.environ["HERMES_PROFILE_TEST_SHARED"] == "outer"
         assert os.environ["HERMES_HOME"] == str(root)
         assert sched._get_hermes_home() == root
 
